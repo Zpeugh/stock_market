@@ -1,8 +1,42 @@
 import intrinio
 import requests
 from requests.auth import HTTPBasicAuth
+from multiprocessing import Pool
 import matplotlib.pyplot as plt
 import numpy as np
+import re
+
+# def _pickle_method(method):
+#     func_name = method.im_func.__name__
+#     obj = method.im_self
+#     cls = method.im_class
+#     return _unpickle_method, (func_name, obj, cls)
+#
+# def _unpickle_method(func_name, obj, cls):
+#     for cls in cls.mro():
+#         try:
+#             func = cls.__dict__[func_name]
+#         except KeyError:
+#             pass
+#         else:
+#             break
+#     return func.__get__(obj, cls)
+#
+# import copy_reg
+# import types
+# copy_reg.pickle(types.MethodType, _pickle_method, _unpickle_method)
+
+def _send_request(self, page_number, ticker_symbol, start_date=None):
+
+    request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, page_number)
+    req = requests.get(request, auth=HTTPBasicAuth('6a547746e6f8e7d3d58f24ab710b5a47','7978430efa72258cec86d6396ce505e4'))
+    response = req.json()
+    print response
+    # print "Response: \nresult_count: %s\npage_size: %s\Page: %s/%s" % (response['result_count'], response['page_size'], response['current_page'], response['total_pages'])
+    return response['data']
+
+def send_all_requests(args_list):
+    return _send_request(*args_list)
 
 class DataCollection:
 
@@ -10,28 +44,74 @@ class DataCollection:
         self.ticker_symbols = []
         self.intrinio_username = '6a547746e6f8e7d3d58f24ab710b5a47'
         self.intrinio_password = '7978430efa72258cec86d6396ce505e4'
-        self.data = []
+        self.data = dict()
+
+    def _send_request(self, page_number, ticker_symbol, start_date=None):
+
+        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, page_number)
+        req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
+        response = req.json()
+        # print "Response: \nresult_count: %s\npage_size: %s\Page: %s/%s" % (response['result_count'], response['page_size'], response['current_page'], response['total_pages'])
+        return response['data']
+
+    def _send_csv_request(self, ticker_symbol, start_date=None):
+
+        request = "https://api.intrinio.com/historical_data.csv?identifier=%s&page_size=10000&start_date=%s&item=close_price&frequency=weekly" % (ticker_symbol, start_date)
+        req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
+        return req.content
 
 
-    def _send_request(self, ticker_symbol=None, start_date=None):
-
-        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%d&start_date=%s&page_number=%d&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, 1)
+    def _get_first_page(self, ticker_symbol=None, start_date=None):
+        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, 1)
         req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
         response = req.json()
         data = response['data']
         num_pages = response['total_pages']
-        print("total pages: %d" % num_pages)
-        if num_pages > 1:
-            # TODO: Make these asynchronous calls
-            for page in range(2, num_pages+1):
-                request = "https://api.intrinio.com/prices?identifier=%s&page_size=%d&start_date=%s&page_number=%d&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, page)
-                req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
-                response = req.json()
-                data.extend(response['data'])
-                print "Response: \nresult_count: %d\npage_size: %d\Page: %d/%d" % (response['result_count'], response['page_size'], response['current_page'], response['total_pages'])
+        print(data)
+        return (num_pages, data)
 
-        return data
+    def _send_requests_async(self, ticker_symbol=None, start_date=None, n_cpu=4):
 
+        num_pages, data = self._get_first_page(ticker_symbol, start_date)
+
+        print "\n pages: %s" % num_pages
+        args_list = []
+        pool = Pool(n_cpu)
+
+        for page in range(1, num_pages + 1):
+            args_list.append( (page, ticker_symbol, start_date) )
+
+        return pool.map(send_all_requests, args_list)
+
+    def _is_data(self, line):
+        is_data = True
+        if line.find("RESULT_COUNT") is not -1:
+            return False
+        if line.find("PAGE_SIZE") is not -1:
+            return False
+        if line.find("total_pages") is not -1:
+            return False
+        if line.find("API_CALL_CREDITS") is not -1:
+            return False
+        if line.find("IDENTIFIER") is not -1:
+            return False
+        if line.find("DATE") is not -1:
+            return False
+        return is_data
+
+    def _format_csv_data(self, data):
+        lines = data.splitlines()
+        print lines
+        dates = []
+        prices = []
+        for line in lines[7:]:
+            if self._is_data(line):
+                pair = line.split(',')
+                dates.append(pair[0])
+                prices.append(pair[1])
+        dates.reverse()
+        prices.reverse()
+        return dates, prices
 
     def get_prices(self, ticker_symbols=None, start_date=None):
         '''
@@ -56,15 +136,21 @@ class DataCollection:
 
         self.data = dict()
         for key in self.ticker_symbols:
-            self.data[key] = self._send_request(key, start_date)
+            # self.data[key] = self._send_requests_async(key, start_date, n_cpu=4)
+            data = self._send_csv_request(key, start_date)
+            self.data["%s_dates" % key], self.data["%s_prices" % key] = self._format_csv_data(data)
         return self.data
 
     def plot_data(self, ticker_symbol):
-        data = self.data[ticker_symbol]
-
-        X = [x['date'] for x in data]
-        Y = [y['close'] for y in data]
+        X = self.data['%s_dates' % ticker_symbol]
+        Y = self.data['%s_prices' % ticker_symbol]
         x_range = np.arange(len(X))
-        # plt.xticks(x_range, X)
+        x_ticks = np.arange(0,len(X), 25)
+        date_labels = [X[i][:7] for i in x_ticks]
+        fig = plt.figure(figsize=(18,10))
+        plt.xticks(x_ticks, date_labels, rotation='vertical')
         plt.plot(x_range, Y)
+        plt.xlabel("Dates")
+        plt.ylabel("Close Price ($)")
+        plt.title("Historical Data for %s" % ticker_symbol)
         plt.show()

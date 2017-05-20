@@ -14,6 +14,9 @@ start_date = sys.argv[2]
 
 results = data_collection.get_prices(ticker, start_date)
 
+print(len(results))
+
+print(results.__class__)
 data_collection.plot_data(ticker)
 # print len(data_collection.data[ticker])
 #
