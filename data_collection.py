@@ -4,27 +4,9 @@ from requests.auth import HTTPBasicAuth
 from multiprocessing import Pool
 import matplotlib.pyplot as plt
 import numpy as np
+from pymongo import MongoClient
+from datetime import datetime
 import re
-
-# def _pickle_method(method):
-#     func_name = method.im_func.__name__
-#     obj = method.im_self
-#     cls = method.im_class
-#     return _unpickle_method, (func_name, obj, cls)
-#
-# def _unpickle_method(func_name, obj, cls):
-#     for cls in cls.mro():
-#         try:
-#             func = cls.__dict__[func_name]
-#         except KeyError:
-#             pass
-#         else:
-#             break
-#     return func.__get__(obj, cls)
-#
-# import copy_reg
-# import types
-# copy_reg.pickle(types.MethodType, _pickle_method, _unpickle_method)
 
 def _send_request(self, page_number, ticker_symbol, start_date=None):
 
@@ -40,26 +22,19 @@ def send_all_requests(args_list):
 
 class DataCollection:
 
-    def __init__(self):
+    def __init__(self, username, password, db="stock_market"):
         self.ticker_symbols = []
-        self.intrinio_username = '6a547746e6f8e7d3d58f24ab710b5a47'
-        self.intrinio_password = '7978430efa72258cec86d6396ce505e4'
+        self.intrinio_username = username
+        self.intrinio_password = password
         self.data = dict()
-
-    def _send_request(self, page_number, ticker_symbol, start_date=None):
-
-        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, page_number)
-        req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
-        response = req.json()
-        # print "Response: \nresult_count: %s\npage_size: %s\Page: %s/%s" % (response['result_count'], response['page_size'], response['current_page'], response['total_pages'])
-        return response['data']
+        self.client = MongoClient('localhost', 27017)
+        self.db = self.client[db]
 
     def _send_csv_request(self, ticker_symbol, start_date=None):
 
         request = "https://api.intrinio.com/historical_data.csv?identifier=%s&page_size=10000&start_date=%s&item=close_price&frequency=weekly" % (ticker_symbol, start_date)
         req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
         return req.content
-
 
     def _get_first_page(self, ticker_symbol=None, start_date=None):
         request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, 1)
@@ -69,19 +44,6 @@ class DataCollection:
         num_pages = response['total_pages']
         print(data)
         return (num_pages, data)
-
-    def _send_requests_async(self, ticker_symbol=None, start_date=None, n_cpu=4):
-
-        num_pages, data = self._get_first_page(ticker_symbol, start_date)
-
-        print "\n pages: %s" % num_pages
-        args_list = []
-        pool = Pool(n_cpu)
-
-        for page in range(1, num_pages + 1):
-            args_list.append( (page, ticker_symbol, start_date) )
-
-        return pool.map(send_all_requests, args_list)
 
     def _is_data(self, line):
         is_data = True
@@ -101,7 +63,6 @@ class DataCollection:
 
     def _format_csv_data(self, data):
         lines = data.splitlines()
-        print lines
         dates = []
         prices = []
         for line in lines[7:]:
@@ -140,6 +101,13 @@ class DataCollection:
             data = self._send_csv_request(key, start_date)
             self.data["%s_dates" % key], self.data["%s_prices" % key] = self._format_csv_data(data)
         return self.data
+
+    def save_data(self, ticker_symbol):
+        dates = self.data["%s_dates" % ticker_symbol]
+        prices = self.data["%s_prices" % ticker_symbol]
+        if (ticker_symbol not in self.db.collection_names()):
+            for i, date in enumerate(dates):
+                self.db[ticker_symbol].insert_one({ "date" : datetime.strptime(date,"%Y-%m-%d"), "close_price": prices[i]})
 
     def plot_data(self, ticker_symbol):
         X = self.data['%s_dates' % ticker_symbol]
