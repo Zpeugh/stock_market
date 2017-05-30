@@ -32,12 +32,12 @@ class DataCollection:
 
     def _send_csv_request(self, ticker_symbol, start_date=None):
 
-        request = "https://api.intrinio.com/historical_data.csv?identifier=%s&page_size=10000&start_date=%s&item=close_price&frequency=weekly" % (ticker_symbol, start_date)
+        request = "https://api.intrinio.com/historical_data.csv?identifier=%s&page_size=10000&start_date=%s&item=close_price&frequency=daily" % (ticker_symbol, start_date)
         req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
         return req.content
 
     def _get_first_page(self, ticker_symbol=None, start_date=None):
-        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=weekly" % (ticker_symbol, 500, start_date, 1)
+        request = "https://api.intrinio.com/prices?identifier=%s&page_size=%s&start_date=%s&page_number=%s&item=price_close&item=price_date&frequency=daily" % (ticker_symbol, 500, start_date, 1)
         req = requests.get(request, auth=HTTPBasicAuth(self.intrinio_username, self.intrinio_password))
         response = req.json()
         data = response['data']
@@ -74,15 +74,15 @@ class DataCollection:
         prices.reverse()
         return dates, prices
 
-    def get_prices(self, ticker_symbols=None, start_date=None):
+    def get_new_data(self, ticker_symbols=None, start_date=None):
         '''
             ticker_symbols:  the lookup for the stock ticker symbol.
                             For example, 'AAPL' for Apple.
             start_date:     string of 'YYYY-MM-DD' for first date to retrieve
                             the historical stock data from.
                             Defaults to Jan 1st, 1980.
-
         '''
+
         if start_date == None:
             start_date = '1980-01-01'
         elif len(str(start_date)) == 4:
@@ -92,15 +92,38 @@ class DataCollection:
             print "No tickers available to retrieve prices for"
             return
         elif isinstance(ticker_symbols, str):
-            print(self.ticker_symbols)
+            self.ticker_symbols = []
             self.ticker_symbols.append(ticker_symbols)
 
         self.data = dict()
         for key in self.ticker_symbols:
-            # self.data[key] = self._send_requests_async(key, start_date, n_cpu=4)
             data = self._send_csv_request(key, start_date)
             self.data["%s_dates" % key], self.data["%s_prices" % key] = self._format_csv_data(data)
         return self.data
+
+
+
+    def retrieve_data(self, ticker_symbol, start_date=None):
+        collection = self.db[ticker_symbol]
+        dates = []
+        prices = []
+        for data in collection.find():
+            dates.append(data["date"])
+            prices.append(data["close_price"])
+
+        if prices == [] or dates == []:
+            print "No data in database, attempting to get data online"
+            self.get_new_data(ticker_symbol, start_date)
+            dates = self.data["%s_dates" % ticker_symbol]
+            prices = self.data["%s_prices" % ticker_symbol]
+            if prices == None or dates == None:
+                print "Unable to retrieve any data for ticker symbol: %s" % ticker_symbol
+            else:
+                self.save_data(ticker_symbol)
+                return self.retrieve_data(ticker_symbol, start_date)
+
+        return dates, prices
+
 
     def save_data(self, ticker_symbol):
         dates = self.data["%s_dates" % ticker_symbol]
@@ -108,17 +131,3 @@ class DataCollection:
         if (ticker_symbol not in self.db.collection_names()):
             for i, date in enumerate(dates):
                 self.db[ticker_symbol].insert_one({ "date" : datetime.strptime(date,"%Y-%m-%d"), "close_price": prices[i]})
-
-    def plot_data(self, ticker_symbol):
-        X = self.data['%s_dates' % ticker_symbol]
-        Y = self.data['%s_prices' % ticker_symbol]
-        x_range = np.arange(len(X))
-        x_ticks = np.arange(0,len(X), 25)
-        date_labels = [X[i][:7] for i in x_ticks]
-        fig = plt.figure(figsize=(18,10))
-        plt.xticks(x_ticks, date_labels, rotation='vertical')
-        plt.plot(x_range, Y)
-        plt.xlabel("Dates")
-        plt.ylabel("Close Price ($)")
-        plt.title("Historical Data for %s" % ticker_symbol)
-        plt.show()
