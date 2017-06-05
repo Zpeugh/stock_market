@@ -17,8 +17,10 @@ dates, prices = data_collection.retrieve_data(ticker_symbol)
 da = DataAnalysis()
 
 
-data = da.get_yearly_trends(dates, prices, [3])
-# da.plot_data(dates,prices, ticker_symbol)
+# data = da.get_yearly_trends(dates, prices, [3])
+
+bounds, sell_dates, profits = da.get_optimal_bounds(dates, prices, low_bound_min=0.3, top_bound_max=0.5, interval=0.01, investment=100, purchase_strategy="immediate")
+da.plot_data(dates, prices, ticker_symbol, sell_dates=sell_dates)
 
 
 # if sys.argv[1]:

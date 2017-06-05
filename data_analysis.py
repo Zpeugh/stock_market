@@ -32,7 +32,8 @@ class DataAnalysis():
 
     def get_yearly_trends(self, dates, prices, periods=None):
         '''
-            data        Timeseries data with dates and prices
+            dates       Array of datetime objects
+            prices      Array of floats corresponding to dates
             periods     Array of monthly periods to examine
         '''
 
@@ -58,7 +59,62 @@ class DataAnalysis():
 
 
 
-    def plot_data(self, dates, prices, ticker_symbol, start_date=None):
+    def _price_is_within_bounds(self, purchase_price, current_price, low_bound, top_bound):
+        if current_price < purchase_price:
+            if current_price < purchase_price * (1 - low_bound):
+                return False
+            else:
+                return True
+        elif current_price > purchase_price:
+            if current_price > purchase_price * (1 + top_bound):
+                return False
+            else:
+                return True
+        else:
+            return True
+
+
+    def _percent_profit(self, purchase_price, sell_price):
+        return (sell_price - purchase_price) / purchase_price;
+
+    def get_optimal_bounds(self, dates, prices, low_bound_min=0.3, top_bound_max=0.5, interval=0.01, investment=100, purchase_strategy="immediate"):
+        '''
+            dates           Array of datetime objects
+            prices          Array of floats corresponding to dates
+            low_bound_min   The percentage to allow a stock to decrease to before selling
+            top_bound_max   The percentage to allow a stock to increase to before selling
+        '''
+
+        top_bounds = np.arange(0, top_bound_max + interval, interval)
+        low_bounds = np.arange(0, low_bound_min + interval, interval)
+
+        total_gain = 0
+        profit_array = []
+        final_sell_dates = []
+        best_profit = -99999
+        best_bounds = None
+        purchase_price = float(prices[0])
+
+        if purchase_strategy == "immediate":
+            for top_bound in top_bounds:
+                for low_bound in low_bounds:
+                    profit_percentages = []
+                    sell_dates = []
+                    for index, price in enumerate(prices):
+                        price = float(price)
+                        if not self._price_is_within_bounds(purchase_price, price, low_bound, top_bound):
+                            profit_percentages.append(self._percent_profit(purchase_price, price))
+                            purchase_price = price
+                            sell_dates.append(dates[index])
+                    total_profit = np.sum(profit_percentages)
+                    if total_profit > best_profit:
+                        best_profit = total_profit
+                        best_bounds = (low_bound, top_bound)
+                        profit_array = profit_percentages
+                        final_sell_dates = sell_dates
+        return best_bounds, final_sell_dates, profit_percentages
+
+    def plot_data(self, dates, prices, ticker_symbol, start_date=None, sell_dates=None):
         X = dates
         Y = prices
         x_range = np.arange(len(X))
@@ -67,6 +123,10 @@ class DataAnalysis():
         fig = plt.figure(figsize=(18,10))
         plt.xticks(x_ticks, date_labels, rotation='vertical')
         plt.plot(x_range, Y)
+        if sell_dates:
+            date_indices = [dates.index(date) for date in sell_dates]
+            for sell_date in date_indices:
+                plt.axvline(x=sell_date, color="r")
         plt.xlabel("Dates")
         plt.ylabel("Close Price ($)")
         plt.title("Historical Data for %s" % ticker_symbol)
